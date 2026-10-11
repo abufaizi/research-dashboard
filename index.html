@@ -8,24 +8,33 @@ header{padding:24px clamp(16px,4vw,48px) 0}h1{margin:0 0 16px;font-size:1.5rem}
 .bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--bd)}
 .tabs{display:flex;gap:4px;flex-wrap:wrap}.tab{background:none;border:0;color:var(--mut);padding:10px 16px;font:inherit;cursor:pointer;border-bottom:3px solid transparent}
 .tab.on{color:var(--ac);border-color:var(--ac);font-weight:600}
-input{padding:9px 14px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--fg);font:inherit;min-width:220px;margin-bottom:8px}
+input,select{padding:9px 14px;border:1px solid var(--bd);border-radius:10px;background:var(--card);color:var(--fg);font:inherit;margin-bottom:8px}
+input{min-width:220px}
 main{padding:20px clamp(16px,4vw,48px) 48px;max-width:1300px;margin:auto}
 .sum{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ac);border-radius:12px;padding:14px 18px}
 .note{color:var(--mut);font-size:.9rem;margin:8px 0 0}
 h2{margin:28px 0 12px;font-size:1.1rem}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.stack{display:grid;gap:14px;margin-top:16px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px}
 .card.best{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac)}
 .card h3{margin:0 0 8px;font-size:1rem}.row{margin:4px 0}.row b{color:var(--mut);font-weight:500}
 .chip{display:inline-block;background:var(--chip);color:var(--ac);border-radius:99px;padding:2px 10px;font-size:.78rem;margin:0 4px 6px 0}
 a{color:var(--ac)}.links{margin-top:10px;display:flex;gap:12px;flex-wrap:wrap}.empty{color:var(--mut)}
+.controls{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.vids{list-style:none;padding:0;margin:10px 0 0}
+.vids li{border-top:1px solid var(--bd);padding:8px 0}
+.meta{color:var(--mut);font-size:.85rem}
 </style></head><body>
 <header><h1>Research Dashboard</h1><div class="bar"><div class="tabs" id="tabs"></div><input id="q" type="search" placeholder="Search cards…"></div></header>
 <main id="main"></main>
 <script src="data.js"></script>
 <script>
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const CLIPS_TAB={id:"daily-clips",title:"Daily Clips"};
+const TABS=[...REPORTS,CLIPS_TAB];
 let cur=(location.hash||"").slice(1)||REPORTS[0].id;
+if(!TABS.some(t=>t.id===cur))cur=REPORTS[0].id;
 function card(c){return `<div class="card${c.best?" best":""}"><h3>${esc(c.name)}${c.best?" ★":""}</h3>`+
 (c.tags||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join("")+
 (c.img?`<img src="${esc(c.img)}" alt="Sample thumbnail: ${esc(c.name)}" style="width:100%;border-radius:8px;margin-bottom:8px;display:block">`:"")+
@@ -33,9 +42,62 @@ function card(c){return `<div class="card${c.best?" best":""}"><h3>${esc(c.name)
 (c.price?`<div class="row"><b>Price:</b> ${esc(c.price)}</div>`:"")+
 (c.ease?`<div class="row"><b>Ease:</b> ${esc(c.ease)}</div>`:"")+
 ((c.links||[]).length?`<div class="links">`+c.links.map(l=>`<a href="${esc(l[1])}" target="_blank" rel="noopener">${esc(l[0])} ↗</a>`).join("")+`</div>`:"")+`</div>`}
+
+/* ---- Daily Clips: reads data/clips/index.json and data/clips/YYYY-MM-DD.json (written by the daily-clips pipeline) ---- */
+const clipCache=new Map();
+let clipDate="",clipKind="all";
+function getJSON(url){
+ if(!clipCache.has(url)){
+  const p=fetch(url,{cache:"no-cache"}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()});
+  p.catch(()=>clipCache.delete(url));
+  clipCache.set(url,p);
+ }
+ return clipCache.get(url);
+}
+const fmtDur=s=>Math.floor(s/60)+":"+String(s%60).padStart(2,"0");
+function clipStory(s,kind){
+ const vids=(s.videos||[]).filter(v=>kind==="all"||(kind==="short")===!!v.is_short);
+ if(!vids.length)return "";
+ return `<div class="card${s.importance>=5?" best":""}"><h3>${esc(s.headline)}</h3>`+
+  (s.importance?`<span class="chip">Importance ${esc(s.importance)}/5</span>`:"")+
+  `<div class="row">${esc(s.summary||"No summary available.")}</div>`+
+  (s.clip_angle?`<div class="row"><b>Clip angle:</b> ${esc(s.clip_angle)}</div>`:"")+
+  `<ul class="vids">`+vids.map(v=>`<li><span class="chip">${v.is_short?"Short":"Long-form"}</span> <a href="${esc(v.url)}" target="_blank" rel="noopener">${esc(v.title)}</a>`+
+   `<div class="meta">${esc(v.channel)} · ${fmtDur(v.duration_seconds)} · ${Number(v.views).toLocaleString()} views</div></li>`).join("")+
+  `</ul></div>`;
+}
+async function renderClips(q){
+ const main=document.getElementById("main");
+ main.innerHTML=`<p class="empty">Loading clips…</p>`;
+ let dates=[];
+ try{dates=(await getJSON("data/clips/index.json")).dates||[]}catch(e){}
+ if(cur!==CLIPS_TAB.id)return;
+ if(!dates.length){main.innerHTML=`<p class="empty">No clip digests published yet.</p>`;return}
+ if(!dates.includes(clipDate))clipDate=dates[0];
+ let d;
+ try{d=await getJSON(`data/clips/${encodeURIComponent(clipDate)}.json`)}
+ catch(e){if(cur===CLIPS_TAB.id)main.innerHTML=`<p class="empty">Could not load the ${esc(clipDate)} digest.</p>`;return}
+ if(cur!==CLIPS_TAB.id)return;
+ const stories=(d.stories||[]).filter(s=>!q||JSON.stringify(s).toLowerCase().includes(q));
+ const dateOpts=dates.map(x=>`<option value="${esc(x)}"${x===clipDate?" selected":""}>${esc(x)}</option>`).join("");
+ const kindOpts=[["all","All videos"],["short","Shorts"],["long","Long-form"]].map(([v,l])=>`<option value="${v}"${v===clipKind?" selected":""}>${l}</option>`).join("");
+ let h=`<div class="sum"><b>Daily Clips · ${esc(d.date)}</b>
+  <div>${esc(d.stories.length)} stories from ${esc(d.candidate_count)} candidate videos · generated ${esc(d.generated_at)}</div>
+  <div class="controls"><select id="cdate" aria-label="Digest date">${dateOpts}</select><select id="ckind" aria-label="Video type">${kindOpts}</select></div>`+
+  (d.mode!=="claude"?`<p class="note">Summaries are source excerpts, not generated summaries.</p>`:"")+
+  `</div>`;
+ const body=stories.map(s=>clipStory(s,clipKind)).filter(Boolean).join("");
+ h+=body?`<div class="stack">${body}</div>`:`<p class="empty">No matches.</p>`;
+ main.innerHTML=h;
+ document.getElementById("cdate").onchange=e=>{clipDate=e.target.value;render()};
+ document.getElementById("ckind").onchange=e=>{clipKind=e.target.value;render()};
+}
+
 function render(){
- const r=REPORTS.find(x=>x.id===cur)||REPORTS[0],q=document.getElementById("q").value.toLowerCase();
- document.getElementById("tabs").innerHTML=REPORTS.map(x=>`<button class="tab${x.id===r.id?" on":""}" data-id="${x.id}">${esc(x.title)}</button>`).join("");
+ const q=document.getElementById("q").value.toLowerCase();
+ document.getElementById("tabs").innerHTML=TABS.map(x=>`<button class="tab${x.id===cur?" on":""}" data-id="${x.id}">${esc(x.title)}</button>`).join("");
+ if(cur===CLIPS_TAB.id){renderClips(q);return}
+ const r=REPORTS.find(x=>x.id===cur)||REPORTS[0];
  let h=`<div class="sum"><b>${esc(r.subtitle)}</b><div>${esc(r.summary)}</div><p class="note">${esc(r.note)}</p></div>`,n=0;
  for(const s of r.sections){const cs=s.cards.filter(c=>!q||JSON.stringify(c).toLowerCase().includes(q));n+=cs.length;
   if(cs.length)h+=`<h2>${esc(s.heading)}</h2><div class="grid">${cs.map(card).join("")}</div>`}
